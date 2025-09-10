@@ -13,6 +13,44 @@ import java.util.Map;
 @Service
 public class K8sService {
 
+    public V1Pod createPod(String ns, String name, String image, Map<String, String> labels, String bearerToken) throws Exception {
+        ApiClient c = K8sClientFactory.forUserToken(bearerToken);
+        CoreV1Api api = new CoreV1Api(c);
+
+        V1ObjectMeta meta = new V1ObjectMeta().name(name).namespace(ns);
+        if (labels != null && !labels.isEmpty()) meta.setLabels(labels);
+
+        V1PodSpec spec = new V1PodSpec()
+                .addContainersItem(new V1Container()
+                        .name("app")
+                        .image(image)
+                        .addPortsItem(new V1ContainerPort().name("http").containerPort(80)));
+
+        V1Pod body = new V1Pod().metadata(meta).spec(spec);
+
+        try {
+            return api.createNamespacedPod(ns, body, null, null, null, null);
+        } catch (ApiException ae) {
+            throw ae;
+        }
+    }
+
+    public void deletePod(String ns, String name, Integer graceSeconds, String bearerToken) throws Exception {
+        ApiClient c = K8sClientFactory.forUserToken(bearerToken);
+        CoreV1Api api = new CoreV1Api(c);
+
+        V1DeleteOptions opts = new V1DeleteOptions();
+        if (graceSeconds != null) opts.setGracePeriodSeconds(Long.valueOf(graceSeconds));
+
+        // PropagationPolicy: "Background" | "Foreground" | "Orphan"
+        String propagationPolicy = "Background";
+        api.deleteNamespacedPod(
+                name, ns,
+                null, null, null, null,
+                propagationPolicy, opts
+        );
+    }
+
     public List<V1Pod> listPods(String ns, String bearerToken) throws Exception {
         ApiClient c = K8sClientFactory.forUserToken(bearerToken);
         CoreV1Api api = new CoreV1Api(c);

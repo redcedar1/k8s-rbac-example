@@ -55,6 +55,31 @@ public class K8sController {
         return ResponseEntity.ok(logs);
     }
 
+    @PostMapping("/{ns}/pods/{name}")
+    public ResponseEntity<?> createPod(@PathVariable("ns") String ns,
+                                    @PathVariable("name") String name,
+                                    @RequestParam("image") String image,
+                                    @RequestBody(required = false) Map<String, String> labels,
+                                    @Parameter(hidden = true) HttpServletRequest req) throws Exception {
+        String token = extractToken(req);
+        var pod = k8sService.createPod(ns, name, image, labels, token);
+        return ResponseEntity.ok(Map.of(
+                "name", pod.getMetadata().getName(),
+                "ns", pod.getMetadata().getNamespace(),
+                "phase", pod.getStatus() != null ? pod.getStatus().getPhase() : ""
+        ));
+    }
+
+    @DeleteMapping("/{ns}/pods/{name}")
+    public ResponseEntity<?> deletePod(@PathVariable("ns") String ns,
+                                    @PathVariable("name") String name,
+                                    @RequestParam(value = "grace", required = false) Integer graceSeconds,
+                                    @Parameter(hidden = true) HttpServletRequest req) throws Exception {
+        String token = extractToken(req);
+        k8sService.deletePod(ns, name, graceSeconds, token);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/{ns}/configmaps/{name}")
     public ResponseEntity<?> upsertConfigMap(@PathVariable("ns") String ns,
                                              @PathVariable("name") String name,
