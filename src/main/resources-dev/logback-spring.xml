@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration debug="true">
+
+  <property name="layoutPattern" value="%d{yyyy-MM-dd HH:mm:ss.SSS} | %-5.5p | %10.10t | %-20.20C:%-5.5L | %msg%n" />
+  <property name="logPath" value="logs" />
+
+  <appender name="STDOUT"
+    class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>${layoutPattern}</pattern>
+    </encoder>
+  </appender>
+
+  <appender name="ROLLING"
+    class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <encoder>
+      <pattern>${layoutPattern}</pattern>
+    </encoder>
+    <file>${logPath}/app.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+      <fileNamePattern>${logPath}/app_%d{yyyy-MM-dd}_%i.log</fileNamePattern>
+      <maxFileSize>100MB</maxFileSize>
+      <maxHistory>10</maxHistory>
+    </rollingPolicy>
+  </appender>
+
+  <logger name="com.inje.authservice" level="DEBUG" />
+
+  <root level="INFO">
+    <appender-ref ref="STDOUT" />
+    <appender-ref ref="ROLLING" />
+  </root>
+
+</configuration>

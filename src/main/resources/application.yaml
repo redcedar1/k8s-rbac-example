@@ -1,0 +1,95 @@
+server:
+  port: 9000
+  servlet:
+    context-path: /auth-service
+
+spring:
+  application:
+    name: auth-service
+
+  cloud:
+    openfeign:
+      circuitbreaker:
+        enabled: true
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      user-query-client:
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 5s
+        permittedNumberOfCallsInHalfOpenState: 3
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+
+      admin-user-command-client:
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 5s
+        permittedNumberOfCallsInHalfOpenState: 3
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    io.kubernetes.client: INFO
+    com.inje.authservice.k8s: DEBUG
+
+---
+spring:
+  config:
+    activate:
+      on-profile: loc
+
+internal:
+  auth:
+    url: ${INTERNAL_AUTH_URL:https://keycloak.catch-me-app.com}
+    realm: ${INTERNAL_AUTH_REALM:test-realm} # 사용자의 업무서비스 별 realm
+    client-id: ${INTERNAL_AUTH_CLIENT_ID:test-client} # 사용자의 업무서비스 별 client-id
+    client-secret: ${INTERNAL_AUTH_CLIENT_SECRET:cNlWeE3ws1o6GgYYCBNy1Hw29VdkOJwY} # 사용자의 업무서비스 별 client-secret
+    internal-client-id: ${INTERNAL_AUTH_INTERNAL_CLIENT_ID:admin-cli} # keycloak 관리용 client-id
+    internal-client-secret: ${INTERNAL_AUTH_INTERNAL_CLIENT_SECRET:d9LpX7aEHN25ZxE1jzuUppiKAUglTtPv} # keycloak 관리용 client-secret
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+internal:
+  auth:
+    url: ${INTERNAL_AUTH_URL:https://keycloak.catch-me-app.com}
+    realm: ${INTERNAL_AUTH_REALM:test-realm}
+    client-id: ${INTERNAL_AUTH_CLIENT_ID:test-client}
+    client-secret: ${INTERNAL_AUTH_CLIENT_SECRET:cNlWeE3ws1o6GgYYCBNy1Hw29VdkOJwY}
+    internal-client-id: ${INTERNAL_AUTH_INTERNAL_CLIENT_ID:admin-cli}
+    internal-client-secret: ${INTERNAL_AUTH_INTERNAL_CLIENT_SECRET:d9LpX7aEHN25ZxE1jzuUppiKAUglTtPv}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prd
+internal:
+  auth:
+    url: ${INTERNAL_AUTH_URL:https://keycloak.catch-me-app.com}
+    realm: ${INTERNAL_AUTH_REALM:test-realm}
+    client-id: ${INTERNAL_AUTH_CLIENT_ID:test-client}
+    client-secret: ${INTERNAL_AUTH_CLIENT_SECRET:cNlWeE3ws1o6GgYYCBNy1Hw29VdkOJwY}
+    internal-client-id: ${INTERNAL_AUTH_INTERNAL_CLIENT_ID:admin-cli}
+    internal-client-secret: ${INTERNAL_AUTH_INTERNAL_CLIENT_SECRET:d9LpX7aEHN25ZxE1jzuUppiKAUglTtPv}
