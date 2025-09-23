@@ -73,14 +73,27 @@ public class PodsService extends K8sBaseService {
         CoreV1Api api = new CoreV1Api(c);
 
         Integer tailLines = (tail != null && tail > 0) ? tail : null;
+        var podObj = api.readNamespacedPod(pod, ns, null);
+        String container = resolveAppContainerName(podObj);
         try {
             return api.readNamespacedPodLog(
                     pod, ns,
-                    null, false, null, null, null,
+                    container, false, null, null, null,
                     null, null, tailLines, null
             );
         } catch (Exception e) {
             throw wrapIfNeeded(e);
         }
+    }
+
+    private static String resolveAppContainerName(io.kubernetes.client.openapi.models.V1Pod pod) {
+        var containers = pod.getSpec().getContainers();
+        for (var c : containers) {
+            var name = c.getName();
+            if (!name.equals("istio-proxy") && !name.startsWith("istio-")) {
+                return name;
+            }
+        }
+        return containers.get(0).getName();
     }
 }
