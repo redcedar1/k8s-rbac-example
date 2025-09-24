@@ -1,0 +1,87 @@
+replicaCount: 1
+
+image:
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  ports:
+    http: 8080
+
+auth:
+  adminUser: admin
+  existingSecret: keycloak-admin-secret
+  passwordSecretKey: admin-password
+
+extraEnvVars:
+  - name: KC_HEALTH_ENABLED
+    value: "true"
+  - name: KC_HTTP_MANAGEMENT_ENABLED
+    value: "true"
+
+  - name: KC_PROXY
+    value: "edge"
+  - name: KC_HTTP_ENABLED
+    value: "true"
+  - name: KC_PROXY_HEADERS
+    value: "xforwarded"
+  - name: KC_PROXY_TRUSTED_ADDRESSES
+    value: "10.100.0.0/16,192.168.0.0/24"
+
+  - name: KC_HOSTNAME
+    value: "keycloak.catch-me-app.com"
+  - name: KC_HOSTNAME_URL
+    value: "https://keycloak.catch-me-app.com/"
+  - name: KC_HOSTNAME_STRICT_HTTPS
+    value: "true"
+
+ingress:
+  enabled: true
+  ingressClassName: keycloak
+  hostname: keycloak.catch-me-app.com
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  tls: true
+
+containerPorts:
+  http: 8080
+
+startupProbe:
+  enabled: false
+
+readinessProbe:
+  enabled: false
+
+livenessProbe:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 1Gi
+  limits:
+    cpu: 500m
+    memory: 2Gi
+
+postgresql:
+  enabled: true
+  auth:
+    username: bn_keycloak
+    database: bitnami_keycloak
+    existingSecret: keycloak-postgresql-secret
+    secretKeys:
+      userPasswordKey: password
+  primary:
+    persistence:
+      enabled: true
+      storageClass: local-path
+      accessModes:
+        - ReadWriteOnce
+      size: 8Gi
+    resources:
+      requests:
+        cpu: 20m
+        memory: 128Mi
+      limits:
+        cpu: "200m"
+        memory: 256Mi

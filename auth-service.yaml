@@ -1,0 +1,226 @@
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: auth-service
+  labels: { app: auth-service }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: auth-service }
+  template:
+    metadata:
+      labels: { app: auth-service }
+      annotations:
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/rewriteAppHTTPProbers: "true"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: app
+          image: redcedar1/auth-service-example:1.0.38
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9000
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              valueFrom: { configMapKeyRef: { name: auth-service-config, key: SPRING_PROFILES_ACTIVE } }
+          resources:
+            requests: { cpu: "200m", memory: "256Mi" }
+            limits:   { cpu: "1",    memory: "1Gi" }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+          volumeMounts:
+            - name: logs
+              mountPath: /app/logs
+      volumes:
+        - name: logs
+          emptyDir: {}
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: auth-service
+  labels: { app: auth-service }
+spec:
+  type: ClusterIP
+  selector: { app: auth-service }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 9000
+---
+# Istio: Gateway + VirtualService
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: auth-gw
+  namespace: auth-service
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port: { number: 443, name: https, protocol: HTTPS }
+      hosts: [ "auth.catch-me-app.com" ]
+      tls:
+        mode: SIMPLE
+        credentialName: auth-tls
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: auth-vs
+  namespace: auth-service
+spec:
+  hosts: [ "auth.catch-me-app.com" ]
+  gateways: [ "auth-gw" ]
+  http:
+    - match:
+        - uri: { prefix: /auth-service }
+      route:
+        - destination:
+            host: auth-service.auth-service.svc.cluster.local
+            port: { number: 80 }
+---
+# Istio: 보안정책 3종
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: authservice-jwt
+  namespace: auth-service
+spec:
+  selector:
+    matchLabels: { app: auth-service }
+  jwtRules:
+    - issuer: "https://keycloak.catch-me-app.com/realms/test-realm"
+      jwksUri: "https://keycloak.catch-me-app.com/realms/test-realm/protocol/openid-connect/certs"
+      audiences: ["kubernetes"]
+      forwardOriginalToken: true
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: authservice-allow
+  namespace: auth-service
+spec:
+  selector:
+    matchLabels: { app: auth-service }
+  action: ALLOW
+  rules:
+    # (A) actuator 헬스 허용 (인증 없이 허용)
+    - to:
+        - operation:
+            methods: ["GET","OPTIONS"]
+            paths: ["/auth-service/actuator/*","/auth-service/actuator/**"]
+    - to:
+        - operation:
+            methods: ["GET","HEAD","OPTIONS"]
+            paths:
+              # springdoc 기본 경로들 + 외부에서 보이는 /auth-service 프리픽스
+              - "/auth-service/swagger-ui"
+              - "/auth-service/swagger-ui/*"
+              - "/auth-service/swagger-ui/**"
+              - "/auth-service/swagger-ui.html"
+              - "/auth-service/v3/api-docs"
+              - "/auth-service/v3/api-docs/*"
+              - "/auth-service/v3/api-docs/**"
+              - "/auth-service/webjars/*"
+              - "/auth-service/webjars/**"
+
+    # (B) 읽기: 인증된 사용자
+    - from: [{ source: { requestPrincipals: ["*"] } }]
+      when:
+        - key: request.auth.claims[groups]
+          values: ["/devopstech/viewers"]
+      to:
+        - operation:
+            methods: ["GET","OPTIONS"]
+            paths: ["/auth-service/api/k8s/*"]
+    # (C) 쓰기/삭제: editors, admin
+    - from: [{ source: { requestPrincipals: ["*"] } }]
+      when:
+        - key: request.auth.claims[groups]
+          values: ["/devopstech/editors","/devopstech/admin"]
+      to:
+        - operation:
+            methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"]
+            paths: ["/auth-service/api/k8s/*"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: strict-mtls
+  namespace: auth-service
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: standard-error-inbound
+  namespace: auth-service
+spec:
+  workloadSelector:
+    labels:
+      app: auth-service
+  configPatches:
+  - applyTo: NETWORK_FILTER
+    match:
+      context: SIDECAR_INBOUND
+      listener:
+        name: virtualInbound
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+    patch:
+      operation: MERGE
+      value:
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          local_reply_config:
+            response_headers_to_add:
+            - header: { key: content-type, value: application/json }
+              append_action: OVERWRITE_IF_EXISTS_OR_ADD
+
+            mappers:
+            # 401
+            - filter:
+                status_code_filter:
+                  comparison: { op: EQ, value: { default_value: 401 } }
+              body:
+                inline_string: |
+                  {"status":"error","code":401,"message":"Unauthorized"}
+
+            # 403
+            - filter:
+                status_code_filter:
+                  comparison: { op: EQ, value: { default_value: 403 } }
+              body:
+                inline_string: |
+                  {"status":"error","code":403,"message":"Forbidden"}
+
+            # 429
+            - filter:
+                status_code_filter:
+                  comparison: { op: EQ, value: { default_value: 429 } }
+              body:
+                inline_string: |
+                  {"status":"error","code":429,"message":"Rate limit exceeded"}
+
+            # 5xx
+            - filter:
+                status_code_filter:
+                  comparison: { op: GE, value: { default_value: 500 } }
+              body:
+                inline_string: |
+                  {"status":"error","code":500,"message":"Internal server error"}
