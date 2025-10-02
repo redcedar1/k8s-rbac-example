@@ -1,0 +1,43 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: authservice-local-rl-inbound
+  namespace: auth-service
+spec:
+  workloadSelector:
+    labels:
+      app: auth-service           # 이 라벨 가진 파드(사이드카)에만 적용
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: SIDECAR_INBOUND  # 사이드카 인바운드 체인
+        listener:
+          name: virtualInbound
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.local_ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+            stat_prefix: in_local_rl
+            # ★ 테스트용: 초당 20rps (버스트 20)
+            token_bucket:
+              max_tokens: 20
+              tokens_per_fill: 20
+              fill_interval: 1s
+            # 경로별로 더 좁히려면 descriptors 사용 (예: swagger만 제한하려면 아래 주석 해제)
+            # descriptors:
+            #   - entries: [{ key: path_prefix, value: /auth-service/swagger-ui/ }]
+            #     token_bucket: { max_tokens: 20, tokens_per_fill: 20, fill_interval: 1s }
+            filter_enabled:
+              default_value: { numerator: 100, denominator: HUNDRED }
+            filter_enforced:
+              default_value: { numerator: 100, denominator: HUNDRED }
+            response_headers_to_add:
+              - append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                header: { key: x-rate-limit, value: "sidecar-local" }
