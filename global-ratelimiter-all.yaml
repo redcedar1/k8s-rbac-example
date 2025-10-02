@@ -1,0 +1,252 @@
+# ========================================
+# 1) Redis
+# ========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: istio-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:6.2
+          ports: [{ containerPort: 6379 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: istio-system
+spec:
+  selector: { app: redis }
+  ports:
+    - port: 6379
+      targetPort: 6379
+
+---
+# ========================================
+# 2) Ratelimit 정책(ConfigMap)
+# ========================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ratelimit-config
+  namespace: istio-system
+data:
+  config.yaml: |
+    domain: istio-gateway
+    descriptors:
+      - key: generic_key
+        value: auth-service
+        rate_limit:
+          unit: second
+          requests_per_unit: 10
+
+---
+# ========================================
+# 3) Ratelimit (env-only + initContainer로 Redis 준비 대기)
+#    - command만 명시(/bin/ratelimit), args는 넣지 않음
+#    - 사이드카 미주입(A안)
+#    - RUNTIME_IGNOREDOTFILES=true (ConfigMap 점 디렉토리 무시)
+# ========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ratelimit
+  namespace: istio-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ratelimit }
+  template:
+    metadata:
+      labels: { app: ratelimit }
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      # Redis 준비될 때까지 대기 (netcat 사용)
+      initContainers:
+        - name: wait-redis
+          image: busybox:1.36
+          command: ["sh","-lc"]
+          args:
+            - |
+              set -eu
+              echo "Waiting for redis:6379..."
+              until nc -z redis.istio-system.svc.cluster.local 6379; do
+                sleep 1
+              done
+              echo "Redis is ready."
+      containers:
+        - name: ratelimit
+          image: docker.io/envoyproxy/ratelimit:master
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/ratelimit"]     # ★ args 없이 env만 사용
+          env:
+            - name: CONFIG_TYPE
+              value: "FILE"
+            - name: FORCE_START_WITHOUT_INITIAL_CONFIG
+              value: "true"
+            - name: HEALTHY_WITH_AT_LEAST_ONE_CONFIG_LOADED
+              value: "true"
+            - name: LOG_LEVEL
+              value: "debug"
+            - name: USE_STATSD
+              value: "false"
+            - name: REDIS_SOCKET_TYPE
+              value: "tcp"
+            - name: REDIS_URL
+              value: "redis.istio-system.svc.cluster.local:6379"
+            - name: RUNTIME_ROOT
+              value: "/data"
+            - name: RUNTIME_SUBDIRECTORY
+              value: "ratelimit"
+            - name: RUNTIME_APPDIRECTORY
+              value: "config"
+            - name: RUNTIME_IGNOREDOTFILES
+              value: "true"
+          ports:
+            - containerPort: 8081   # gRPC
+            - containerPort: 8080   # HTTP(/healthcheck,/rlconfig)
+          volumeMounts:
+            - name: rl-config
+              mountPath: /data/ratelimit/config
+      volumes:
+        - name: rl-config
+          configMap:
+            name: ratelimit-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ratelimit
+  namespace: istio-system
+spec:
+  selector: { app: ratelimit }
+  ports:
+    - name: grpc
+      port: 8081
+      targetPort: 8081
+    - name: http
+      port: 8080
+      targetPort: 8080
+
+---
+# ========================================
+# 4) EnvoyFilter (필터 삽입 + RLS 클러스터)
+#    - 실패시 500 방지 위해 failure_mode_deny:false (권장)
+#    - 네 환경 기준(8443, SNI)
+# ========================================
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ingress-global-rl
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          name: "0.0.0.0_8443"
+          filterChain:
+            sni: "auth.catch-me-app.com"
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ratelimit
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+            domain: istio-gateway
+            failure_mode_deny: false        # ★ 실패 시 통과 (운영 중 500 방지)
+            enable_x_ratelimit_headers: DRAFT_VERSION_03
+            rate_limit_service:
+              grpc_service:
+                envoy_grpc:
+                  cluster_name: rate_limit_cluster
+                timeout: 0.25s
+    - applyTo: CLUSTER
+      match:
+        context: GATEWAY
+      patch:
+        operation: ADD
+        value:
+          name: rate_limit_cluster
+          type: STRICT_DNS
+          connect_timeout: 0.25s
+          lb_policy: ROUND_ROBIN
+          http2_protocol_options: {}
+          load_assignment:
+            cluster_name: rate_limit_cluster
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: ratelimit.istio-system.svc.cluster.local
+                          port_value: 8081
+
+---
+# ========================================
+# 5) EnvoyFilter (HTTP_ROUTE 액션 주입: 모든 ROUTE에 rate_limits)
+# ========================================
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ingress-global-rl-action
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          name: "https.443.https.auth-gw.auth-service"   # ← 네 route name
+          vhost:
+            name: "auth.catch-me-app.com:443"            # ← 네 vHost
+            route:
+              action: ROUTE
+      patch:
+        operation: MERGE
+        value:
+          route:
+            rate_limits:
+              - stage: 0
+                actions:
+                  - generic_key:
+                      descriptor_value: "auth-service"
+
+---
+# ========================================
+# 6) DR (Ingress → RLS 평문, 사이드카 미주입이라 필수)
+# ========================================
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: ratelimit-dr
+  namespace: istio-system
+spec:
+  host: ratelimit.istio-system.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE
