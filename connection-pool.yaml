@@ -1,0 +1,24 @@
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: auth-service-dr-test
+  namespace: auth-service
+spec:
+  host: auth-service.auth-service.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      http:
+        http1MaxPendingRequests: 5     # 대기열 5개 넘으면 즉시 실패(503)
+        maxRequestsPerConnection: 50
+        idleTimeout: 30s
+      tcp:
+        maxConnections: 20
+        connectTimeout: 3s
+    outlierDetection:
+      # 구버전 호환 필드들
+      consecutiveErrors: 3              # 연속 에러(5xx/gateway error) 3회면 배제
+      # 필요하면 함께 사용 가능 (게이트웨이 오류만 카운트)
+      consecutiveGatewayErrors: 3
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
