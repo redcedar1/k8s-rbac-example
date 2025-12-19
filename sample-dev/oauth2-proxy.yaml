@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oauth2-proxy
+  namespace: sample-dev
+type: Opaque
+stringData:
+  client-id: "sample-client"
+  client-secret: "Tldua2gjanpqYVP3QSXyGZIy4O0GZ3rX"
+  cookie-secret: "vUGO0t0D0qvS_YFkN2zdpb-aPuwBMKAaParB6HRjNng="
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-proxy
+  namespace: sample-dev
+spec:
+  type: ClusterIP
+  selector:
+    app: oauth2-proxy
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-proxy
+  namespace: sample-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oauth2-proxy
+  template:
+    metadata:
+      labels:
+        app: oauth2-proxy
+    spec:
+      # ✅ SA/ConfigMap 제거 (최소 구성)
+      automountServiceAccountToken: false
+
+      containers:
+      - name: oauth2-proxy
+        image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+        imagePullPolicy: IfNotPresent
+
+        args:
+            - --provider=oidc
+            - --oidc-issuer-url=https://keycloak.catch-me-app.com/realms/sample-realm
+
+            - --client-id=$(OAUTH2_PROXY_CLIENT_ID)
+            - --client-secret=$(OAUTH2_PROXY_CLIENT_SECRET)
+            - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+            - --cookie-domain=.catch-me-app.com
+            - --redirect-url=https://sample-dev.catch-me-app.com/oauth2/callback
+            - --scope=openid email profile
+            - --reverse-proxy=true
+
+            - --pass-access-token=true
+            - --set-authorization-header=true
+            - --pass-authorization-header=true
+            - --oidc-groups-claim=groups
+            - --scope=openid email profile
+
+            - --email-domain=*
+            - --upstream=http://sample-petgradle-boot-svc.sample-dev.svc.cluster.local:80
+            - --pass-host-header=false
+            - --http-address=0.0.0.0:4180
+
+        env:
+          - name: OAUTH2_PROXY_CLIENT_ID
+            valueFrom:
+              secretKeyRef:
+                name: oauth2-proxy
+                key: client-id
+          - name: OAUTH2_PROXY_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: oauth2-proxy
+                key: client-secret
+          - name: OAUTH2_PROXY_COOKIE_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: oauth2-proxy
+                key: cookie-secret
+
+        ports:
+          - containerPort: 4180
+            name: http
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /ping
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 2000
+          runAsGroup: 2000
+          seccompProfile:
+            type: RuntimeDefault
+
+        # ✅ readOnlyRootFilesystem 이면 /tmp 필요할 때가 많음
+        volumeMounts:
+          - name: tmp
+            mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}

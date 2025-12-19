@@ -1,0 +1,199 @@
+apiVersion: v1
+automountServiceAccountToken: true
+imagePullSecrets:
+- name: regcred
+kind: ServiceAccount
+metadata:
+  labels:
+    app: oauth2-proxy
+    app.kubernetes.io/component: authentication-proxy
+    app.kubernetes.io/instance: oauth2-proxy
+    app.kubernetes.io/name: oauth2-proxy
+    app.kubernetes.io/part-of: oauth2-proxy
+    app.kubernetes.io/version: 7.5.1
+  name: oauth2-proxy
+---
+apiVersion: v1
+data:
+  oauth2_proxy.cfg: |-
+    email_domains = [ "*" ]
+    upstreams = [ "file:///dev/null" ]
+kind: ConfigMap
+metadata:
+  labels:
+    app: oauth2-proxy
+    app.kubernetes.io/component: authentication-proxy
+    app.kubernetes.io/instance: oauth2-proxy
+    app.kubernetes.io/name: oauth2-proxy
+    app.kubernetes.io/part-of: oauth2-proxy
+    app.kubernetes.io/version: 7.5.1
+  name: oauth2-proxy
+---
+apiVersion: v1
+stringData:
+  client-id: sample
+  client-secret: uEvibRA4P2IhbeyBj6VAagkqTs34whxu
+  cookie-secret: vUGO0t0D0qvS_YFkN2zdpb-aPuwBMKAaParB6HRjNng=
+kind: Secret
+metadata:
+  labels:
+    app: oauth2-proxy
+    app.kubernetes.io/component: authentication-proxy
+    app.kubernetes.io/instance: oauth2-proxy
+    app.kubernetes.io/name: oauth2-proxy
+    app.kubernetes.io/part-of: oauth2-proxy
+    app.kubernetes.io/version: 7.5.1
+  name: oauth2-proxy
+type: Opaque
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: oauth2-proxy
+    app.kubernetes.io/component: authentication-proxy
+    app.kubernetes.io/instance: oauth2-proxy
+    app.kubernetes.io/name: oauth2-proxy
+    app.kubernetes.io/part-of: oauth2-proxy
+    app.kubernetes.io/version: 7.5.1
+  name: oauth2-proxy
+spec:
+  ports:
+  - appProtocol: http
+    name: http
+    port: 80
+    protocol: TCP
+    targetPort: http
+  - appProtocol: http
+    name: metrics
+    port: 44180
+    protocol: TCP
+    targetPort: metrics
+  selector:
+    app.kubernetes.io/instance: oauth2-proxy
+    app.kubernetes.io/name: oauth2-proxy
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: oauth2-proxy
+    app.kubernetes.io/component: authentication-proxy
+    app.kubernetes.io/instance: oauth2-proxy
+    app.kubernetes.io/name: oauth2-proxy
+    app.kubernetes.io/part-of: oauth2-proxy
+    app.kubernetes.io/version: 7.5.1
+  name: oauth2-proxy
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: oauth2-proxy
+      app.kubernetes.io/name: oauth2-proxy
+  template:
+    metadata:
+      labels:
+        app: oauth2-proxy
+        app.kubernetes.io/component: authentication-proxy
+        app.kubernetes.io/instance: oauth2-proxy
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: oauth2-proxy
+        app.kubernetes.io/part-of: oauth2-proxy
+        app.kubernetes.io/version: 7.5.1
+    spec:
+      automountServiceAccountToken: true
+      containers:
+      - args:
+        - --http-address=0.0.0.0:4180
+        - --https-address=0.0.0.0:4443
+        - --metrics-address=0.0.0.0:44180
+        - --cookie-domain=.gongyoung.kr
+        - --cookie-secure=true
+        - --cookie-samesite=none
+        - --cookie-expire=0
+        - --redirect-url=https://sample-dev-csa.gongyoung.kr/oauth2/callback
+        - --provider=oidc
+        - --provider-display-name=Keycloak
+        - --oidc-issuer-url=https://dev-keycloak-csa.gongyoung.kr/realms/sample
+        # - --allowed-role=<realm role name> // Optional, required realm role
+        # - --allowed-role=<client id>:<client role name> // Optional, required client role
+        # - --allowed-group=</group name> // Optional, requires group client scope
+        # - --oidc-groups-claim=groups
+        - --code-challenge-method=S256
+        - --set-xauthrequest=true
+        - --set-authorization-header=true
+        - --pass-access-token=true
+        - --pass-authorization-header=false
+        - --skip-jwt-bearer-tokens=false
+        - --whitelist-domain=.gongyoung.kr
+        - --config=/etc/oauth2_proxy/oauth2_proxy.cfg
+        - --ssl-insecure-skip-verify=true
+        env:
+        - name: OAUTH2_PROXY_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              key: client-id
+              name: oauth2-proxy
+        - name: OAUTH2_PROXY_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: client-secret
+              name: oauth2-proxy
+        - name: OAUTH2_PROXY_COOKIE_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: cookie-secret
+              name: oauth2-proxy
+        image: harbor-dev-csa.gongyoung.kr/cc-v2.1.0/oauth2-proxy/oauth2-proxy:v7.8.1
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /ping
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 0
+          timeoutSeconds: 1
+        name: oauth2-proxy
+        ports:
+        - containerPort: 4180
+          name: http
+          protocol: TCP
+        - containerPort: 44180
+          name: metrics
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 2000
+          runAsNonRoot: true
+          runAsUser: 2000
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - mountPath: /etc/oauth2_proxy/oauth2_proxy.cfg
+          name: configmain
+          subPath: oauth2_proxy.cfg
+      nodeSelector:
+        magnum.openstack.org/nodegroup: g01
+      serviceAccountName: oauth2-proxy
+      tolerations: []
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: oauth2-proxy
+        name: configmain

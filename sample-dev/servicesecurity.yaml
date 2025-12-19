@@ -1,0 +1,67 @@
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: sample-authn-ra
+  namespace: sample-dev
+spec:
+  selector:
+    matchLabels:
+      requires-auth: "true"
+  jwtRules:
+  - issuer: "https://keycloak.catch-me-app.com/realms/sample-realm"
+    jwksUri: "https://keycloak.catch-me-app.com/realms/sample-realm/protocol/openid-connect/certs"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-admin-owner-new
+  namespace: sample-dev
+spec:
+  selector:
+    matchLabels:
+      requires-auth: "true"
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        requestPrincipals: ["*"]
+    to:
+    - operation:
+        paths:
+        - /petgradle/owners/new
+        - /petgradle/owners/new/*
+    when:
+    - key: request.auth.claims[groups]
+      values: ["/admin"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-authenticated-petgradle-except-admin
+  namespace: sample-dev
+spec:
+  selector:
+    matchLabels:
+      requires-auth: "true"
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        requestPrincipals: ["*"]
+    to:
+    - operation:
+        paths:
+        - /petgradle
+        - /petgradle/*
+        notPaths:
+        - /petgradle/owners/new
+        - /petgradle/owners/new/*
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: mtls-strict
+  namespace: sample-dev
+spec:
+  mtls:
+    mode: STRICT

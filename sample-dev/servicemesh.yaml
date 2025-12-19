@@ -1,0 +1,35 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: auth-vs
+  namespace: sample-dev
+spec:
+  gateways:
+    - istio-system/auth-gw
+  hosts:
+    - sample-dev.catch-me-app.com
+  http:
+    - match:
+        - uri:
+            exact: /
+      redirect:
+        uri: /petgradle/
+    # 1) oauth2-proxy 자체 엔드포인트(/oauth2/*)는 oauth2-proxy로
+    - match:
+        - uri:
+            prefix: /oauth2
+      route:
+        - destination:
+            host: oauth2-proxy.sample-dev.svc.cluster.local
+            port:
+              number: 80
+
+    # 2) 나머지 모든 경로도 oauth2-proxy로 (로그인 강제)
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: oauth2-proxy.sample-dev.svc.cluster.local
+            port:
+              number: 80
